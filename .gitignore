@@ -25,8 +25,14 @@ auto_interp_results
 *.csv
 *.test
 *.png
+!figures/*.png
 *.pkl
 *.pt
 
 # ideally would load autointerp as a module but can't get it working so just cloning and ignoring
 neuron_explainer
+
+reproductions
+reproductions/
+requirements-gb10.txt
+plot_partial_results.py

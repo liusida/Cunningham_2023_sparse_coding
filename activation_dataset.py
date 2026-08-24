@@ -1,4 +1,4 @@
-import json
+import itertools
 import math
 import multiprocessing as mp
 import os
@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from baukit import Trace
 from datasets import Dataset, DatasetDict, load_dataset
+from datasets import config as datasets_config
 from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -25,6 +26,9 @@ T = TypeVar("T", bound=Union[Dataset, DatasetDict])
 MODEL_BATCH_SIZE = 4
 CHUNK_SIZE_GB = 2.0
 MAX_SENTENCE_LEN = 256
+
+# This text-only pipeline must not require torchvision's optional video API.
+datasets_config.TORCHVISION_AVAILABLE = False
 
 
 def check_use_baukit(model_name):
@@ -106,30 +110,20 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     return tensor_name
 
 
-def read_from_pile(address: str, max_lines: int = 100_000, start_line: int = 0):
-    """Reads a file from the Pile dataset. Returns a generator."""
-
-    with open(address, "r") as f:
-        for i, line in enumerate(f):
-            if i < start_line:
-                continue
-            if i >= max_lines + start_line:
-                break
-            yield json.loads(line)
-
-
 def make_sentence_dataset(dataset_name: str, max_lines: int = 20_000, start_line: int = 0):
-    """Returns a dataset from the Huggingface Datasets library."""
-    if dataset_name == "EleutherAI/pile":
-        if not os.path.exists("pile0"):
-            print("Downloading shard 0 of the Pile dataset (requires 50GB of disk space).")
-            if not os.path.exists("pile0.zst"):
-                os.system("curl https://the-eye.eu/public/AI/pile/train/00.jsonl.zst > pile0.zst")
-                os.system("unzstd pile0.zst")
-        dataset = Dataset.from_list(list(read_from_pile("pile0", max_lines=max_lines, start_line=start_line)))
-    else:
-        dataset = load_dataset(dataset_name, split="train")#, split=f"train[{start_line}:{start_line + max_lines}]")
-    return dataset
+    """Load a bounded, deterministic slice from a Hugging Face text dataset."""
+    if start_line < 0 or max_lines <= 0:
+        raise ValueError("start_line must be nonnegative and max_lines must be positive")
+    stream = load_dataset(dataset_name, split="train", streaming=True)
+    rows = list(itertools.islice(iter(stream), start_line, start_line + max_lines))
+    if not rows:
+        raise ValueError(
+            f"Dataset {dataset_name!r} had no rows in "
+            f"[{start_line}, {start_line + max_lines})"
+        )
+    if "text" not in rows[0]:
+        raise ValueError(f"Dataset {dataset_name!r} has no 'text' column")
+    return Dataset.from_list(rows)
 
 
 # Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
@@ -554,13 +548,15 @@ def setup_data(
     skip_chunks: int = 0,
     device: torch.device = torch.device("cuda:0"),
     center_dataset: bool = False,
+    max_lines: Optional[int] = None,
 ):
     layers = [layer] if isinstance(layer, int) else layer
 
     sentence_len_lower = 1000
     activation_width = get_activation_size(model.cfg.model_name, layer_loc)
     baukit = check_use_baukit(model.cfg.model_name)
-    max_lines = int((chunk_size_gb * 1e9 * n_chunks) / (activation_width * sentence_len_lower * 2))
+    if max_lines is None:
+        max_lines = int((chunk_size_gb * 1e9 * n_chunks) / (activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines, start_line=start_line)

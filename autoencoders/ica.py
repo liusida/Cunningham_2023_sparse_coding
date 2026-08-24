@@ -1,12 +1,14 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import torch
 from sklearn.decomposition import FastICA
 from sklearn.preprocessing import StandardScaler
-from torchtyping import TensorType
-
-from typing import Tuple
+if TYPE_CHECKING:
+    from torchtyping import TensorType
 
 from autoencoders.learned_dict import LearnedDict
 from autoencoders.topk_encoder import TopKLearnedDict

@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import torch
 from torch import nn
-from torchtyping import TensorType
-
-from typing import Tuple
+if TYPE_CHECKING:
+    from torchtyping import TensorType
 
 from autoencoders.ensemble import DictSignature
 

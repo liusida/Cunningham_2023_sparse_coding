@@ -115,6 +115,7 @@ class FunctionalTiedSAE(DictSignature):
         nn.init.zeros_(params["encoder_bias"])
 
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+        buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
         
 
         return params, buffers
