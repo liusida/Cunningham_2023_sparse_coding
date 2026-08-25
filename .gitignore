@@ -36,3 +36,6 @@ reproductions
 reproductions/
 requirements-gb10.txt
 plot_partial_results.py
+tinker_evaluator/.venv/
+logs/
+run-*

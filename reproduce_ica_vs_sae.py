@@ -44,10 +44,12 @@ DATASETS = {
     "pile10k": "NeelNanda/pile-10k",
     "openwebtext": "Skylion007/openwebtext",
 }
-INTERPRETER_MODELS = (
+OPENAI_INTERPRETER_MODELS = (
     "gpt-4.1-mini-2025-04-14",
     "gpt-4o-mini-2024-07-18",
 )
+TINKER_PIPELINE = "tinker-inkling-qwen"
+INTERPRETER_MODELS = (*OPENAI_INTERPRETER_MODELS, TINKER_PIPELINE)
 METHODS = {
     "ica": ("ica", "legacy_nonnegative", False),
     "sae": ("sae", "legacy_nonnegative", False),
@@ -101,6 +103,7 @@ PLOT_REPRODUCTION_NUMBERS = {"pile10k": 1, "openwebtext": 2}
 PLOT_MODEL_LABELS = {
     "gpt-4.1-mini-2025-04-14": "GPT4.1-mini",
     "gpt-4o-mini-2024-07-18": "GPT4o-mini",
+    TINKER_PIPELINE: "Inkling + Qwen",
 }
 
 
@@ -146,6 +149,15 @@ def selected_datasets(name: str) -> Iterable[tuple[str, str]]:
 
 def selected_models(name: str) -> Iterable[str]:
     return INTERPRETER_MODELS if name == "all" else (name,)
+
+
+def selected_openai_models(name: str) -> Iterable[str]:
+    if name == TINKER_PIPELINE:
+        raise ValueError(
+            "Run Tinker interpretation with `python tinker_evaluator/interpret.py`; "
+            "the main CLI can summarize and plot its results"
+        )
+    return OPENAI_INTERPRETER_MODELS if name == "all" else (name,)
 
 
 def selected_layers(name: str) -> tuple[int, ...]:
@@ -591,7 +603,7 @@ def interpret(args: argparse.Namespace) -> None:
     for slug, _ in selected_datasets(args.dataset):
         for layer in selected_layers(args.layer):
             directory = run_dir(args, slug, layer)
-            for model in selected_models(args.interpreter_model):
+            for model in selected_openai_models(args.interpreter_model):
                 methods = (
                     METHODS.items()
                     if args.method == "all"
@@ -631,7 +643,7 @@ def interpret(args: argparse.Namespace) -> None:
 
 
 def check_api(args: argparse.Namespace) -> None:
-    for model in selected_models(args.interpreter_model):
+    for model in selected_openai_models(args.interpreter_model):
         check_model_compatibility(model, args.env_file)
         log("API check", f"{model} supports structured output and log probabilities", "32")
 
@@ -937,12 +949,28 @@ def plot(args: argparse.Namespace) -> None:
                 for row in observed:
                     if row["n"] == args.n_features:
                         continue
+                    if method == "sae":
+                        offset = (-6, -7)
+                        horizontal_alignment = "right"
+                        vertical_alignment = "top"
+                    elif method in ("ica", "ica_full"):
+                        offset = (-6, -5)
+                        horizontal_alignment = "right"
+                        vertical_alignment = "center"
+                    else:
+                        offset = (6, 7)
+                        horizontal_alignment = "left"
+                        vertical_alignment = "bottom"
+                    if row["layer"] == max(layers):
+                        offset = (-6, offset[1])
+                        horizontal_alignment = "right"
                     axis.annotate(
                         f"n={row['n']}",
                         (row["layer"], row["mean"]),
-                        xytext=(0, 7),
+                        xytext=offset,
                         textcoords="offset points",
-                        ha="center",
+                        ha=horizontal_alignment,
+                        va=vertical_alignment,
                         fontsize=7,
                         color=style["color"],
                     )

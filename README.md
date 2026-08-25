@@ -97,7 +97,9 @@ fit ICA on 524,288 activations for 20 iterations. After applying the same
 stronger-tail orientation, its aggregate interpretability score is within about
 0.02 of the released-code-budget fit on both training corpora.
 
-![ICA fitting-budget comparison](figures/ica-reduced.png)
+<p align="center">
+  <img src="figures/ica-reduced.png" alt="ICA fitting-budget comparison" width="50%">
+</p>
 
 On our GX10, fitting all twelve reduced ICA models with the CPU implementation
 took approximately 17 minutes, compared with 28 minutes for training the twelve
@@ -153,25 +155,79 @@ Stages are restartable. Only `check-api` and `interpret` call the OpenAI API.
 Generated artifacts and per-run metadata are written under
 `reproductions/ica_vs_sae/`.
 
+An optional independent Inkling-explainer/Qwen-simulator evaluation uses an
+isolated Python 3.11 environment; see [`tinker_evaluator/`](tinker_evaluator/).
+
 ## Python change audit
 
-The reproduction changes six Python files relative to the public repository.
-Four are small compatibility fixes to existing files; the experiment workflow
-and current interpreter are isolated in two new files.
+The reproduction changes seven Python files relative to the public repository.
+Four are small compatibility fixes to existing files; the experiment workflows
+and current evaluators are isolated in three new files.
 
 **Key experimental change:** the Fixed ICA path in `modern_interpret.py`
 resolves ICA's arbitrary sign before selecting top examples. Without a sign
 rule, the public evaluation can rank a component's weaker positive tail while
 ignoring its stronger, interpretable negative tail.
 
-| File | Status | Summary of modifications |
-| --- | --- | --- |
-| **`modern_interpret.py`** | **Added — key experimental change** | Reimplements the retired OpenAI interpretation interface using current chat completions, structured activation labels, token log probabilities, retries, pacing, and resumable per-feature outputs. It preserves the historical top/random split and correlation score, extracts the shared evaluation activations, and, for Fixed ICA, **applies fitting-data orientations before top-example selection**. |
-| `activation_dataset.py` | Modified | Replaces the unavailable hard-coded Pile shard download with a bounded, deterministic Hugging Face dataset stream. Adds explicit dataset-range validation and an optional document limit, and prevents this text-only pipeline from importing torchvision's optional video support. |
-| `autoencoders/ica.py` | Modified | Defers type annotations and makes `torchtyping` a type-checking-only import, avoiding a runtime compatibility dependency. ICA fitting and dictionary calculations are unchanged. |
-| `autoencoders/learned_dict.py` | Modified | Applies the same annotation and type-checking-only compatibility change. Learned-dictionary behavior is unchanged. |
-| `autoencoders/sae_ensemble.py` | Modified | Adds the missing `bias_decay` buffer during tied-SAE initialization. This is the one-line fix required for the public training path to run; its value is zero in this experiment. |
-| `reproduce_ica_vs_sae.py` | Added | Provides the restartable command-line workflow for preparation, SAE training, reduced- and released-code-budget ICA fitting, evaluation encoding, API checks, interpretation, statistical summaries, and figures. It records run metadata, fixes seeds, reports progress, and keeps paid API work confined to the interpretation stages. |
+<table>
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong><code>modern_interpret.py</code></strong></td>
+      <td><strong>Added — key experimental change</strong></td>
+    </tr>
+    <tr>
+      <td colspan="2">Reimplements the retired OpenAI interpretation interface using current chat completions, structured activation labels, token log probabilities, retries, pacing, and resumable per-feature outputs. It preserves the historical top/random split and correlation score, extracts the shared evaluation activations, and, for Fixed ICA, <strong>applies fitting-data orientations before top-example selection</strong>.</td>
+    </tr>
+    <tr>
+      <td><code>activation_dataset.py</code></td>
+      <td>Modified</td>
+    </tr>
+    <tr>
+      <td colspan="2">Replaces the unavailable hard-coded Pile shard download with a bounded, deterministic Hugging Face dataset stream. Adds explicit dataset-range validation and an optional document limit, and prevents this text-only pipeline from importing torchvision's optional video support.</td>
+    </tr>
+    <tr>
+      <td><code>autoencoders/ica.py</code></td>
+      <td>Modified</td>
+    </tr>
+    <tr>
+      <td colspan="2">Defers type annotations and makes <code>torchtyping</code> a type-checking-only import, avoiding a runtime compatibility dependency. ICA fitting and dictionary calculations are unchanged.</td>
+    </tr>
+    <tr>
+      <td><code>autoencoders/learned_dict.py</code></td>
+      <td>Modified</td>
+    </tr>
+    <tr>
+      <td colspan="2">Applies the same annotation and type-checking-only compatibility change. Learned-dictionary behavior is unchanged.</td>
+    </tr>
+    <tr>
+      <td><code>autoencoders/sae_ensemble.py</code></td>
+      <td>Modified</td>
+    </tr>
+    <tr>
+      <td colspan="2">Adds the missing <code>bias_decay</code> buffer during tied-SAE initialization. This is the one-line fix required for the public training path to run; its value is zero in this experiment.</td>
+    </tr>
+    <tr>
+      <td><code>reproduce_ica_vs_sae.py</code></td>
+      <td>Added</td>
+    </tr>
+    <tr>
+      <td colspan="2">Provides the restartable command-line workflow for preparation, SAE training, reduced- and released-code-budget ICA fitting, evaluation encoding, API checks, interpretation, statistical summaries, and figures. It records run metadata, fixes seeds, reports progress, and keeps paid API work confined to the interpretation stages.</td>
+    </tr>
+    <tr>
+      <td><code>tinker_evaluator/interpret.py</code></td>
+      <td>Added</td>
+    </tr>
+    <tr>
+      <td colspan="2">Runs the optional Python 3.11 Tinker evaluator, using Inkling for explanations and Qwen3.8-27B for independent activation prediction. It reads the same evaluation artifacts and fitting-data ICA orientations and writes the standard resumable result schema.</td>
+    </tr>
+  </tbody>
+</table>
 
 The historical `interpret.py` and the model architectures are otherwise left
 untouched. Reviewers can use this table as a map before inspecting the commit's
@@ -184,11 +240,27 @@ full diff.
 - **GPT4.1-mini**: `gpt-4.1-mini-2025-04-14`
 - **Pythia-70m**: `EleutherAI/pythia-70m-deduped`
 
+## Additional experiment: Inkling → Qwen
+
+As an independent evaluator check, we repeat the full grid using
+**Inkling** to generate feature explanations and **Qwen3.8-27B** to predict
+token activations. This pipeline reproduces the main qualitative result:
+SAE leads in the early layers, orienting ICA’s stronger tail substantially
+improves its score, and Fixed ICA becomes competitive with or exceeds SAE in
+later layers. Absolute scores differ between evaluator pipelines and should
+not be compared directly.
+
+Qwen returned malformed simulator output for 8 of 9,000 feature–method
+evaluations after six attempts (0.089%). We exclude these records rather than
+truncate, pad, or manually repair them. Separately, 13 layer-5 SAE features
+lacked the required 20 nonzero evaluation examples and are reported using the
+resulting sample counts.
+
+<p align="center">
+  <img src="figures/ica-vs-sae-tinker.png" alt="" width="50%">
+</p>
+
 ## Further discussion
 
 For further discussion and results, please refer to our
 [ICA Lens paper](https://arxiv.org/abs/2606.11722).
-
-## Self-critique
-
-We also document our internal review in [`critique.md`](critique.md).
