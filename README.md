@@ -41,7 +41,7 @@ predicted and actual activations.
 | --- | --- | --- |
 | SAE | 20,981,760 input activations (**Pile10k**: 1.36 passes; **OpenWebText**: 1 pass) | Rank by maximum activation (SAE activations are nonnegative) |
 | ICA | Complete first chunk (2,098,176 input activations); at most 200 iterations | Rank the positive tail; ignore the negative tail |
-| Fixed ICA | Reuses ICA | **Orient the stronger tail positive**, then rank the positive tail; ignore the negative tail |
+| Fixed ICA | Reuses ICA | **Orient the stronger fitting-data tail positive**, then rank the positive tail; ignore the negative tail |
 
 These counts follow the released code. Its ten SAE checkpoints correspond to
 ten 2 GiB chunks rather than ten conventional full-dataset epochs; its 2 GiB
@@ -79,10 +79,6 @@ around layer 3 and exceeds SAE in the later layers for both training corpora.
 Our claim is limited to showing that the one-sided public evaluation can
 substantially under-score ICA; we do not claim that the stronger tail is always
 more interpretable or that this is the uniquely correct orientation rule.
-
-The plotted runs choose orientation from evaluation activations. Choosing it
-instead from the ICA fitting data gives the same sign for 1,747/1,800 (97.1%)
-full-budget components.
 
 Absolute scores should not be compared directly with the original figure
 because its retired GPT-3.5/GPT-4 interpreters are replaced by
@@ -131,6 +127,9 @@ python reproduce_ica_vs_sae.py train
 # Fit released-code-budget ICA (the expensive CPU stage).
 python reproduce_ica_vs_sae.py train-ica-full
 
+# Fix ICA signs using only the activations used to fit each ICA model.
+python reproduce_ica_vs_sae.py orient-ica
+
 # Encode the shared evaluation fragments with each fitted model.
 python reproduce_ica_vs_sae.py eval-data
 
@@ -167,7 +166,7 @@ ignoring its stronger, interpretable negative tail.
 
 | File | Status | Summary of modifications |
 | --- | --- | --- |
-| **`modern_interpret.py`** | **Added — key experimental change** | Reimplements the retired OpenAI interpretation interface using current chat completions, structured activation labels, token log probabilities, retries, pacing, and resumable per-feature outputs. It preserves the historical top/random split and correlation score, extracts the shared evaluation activations, and, for Fixed ICA, **orients each component's stronger tail positively before top-example selection**. |
+| **`modern_interpret.py`** | **Added — key experimental change** | Reimplements the retired OpenAI interpretation interface using current chat completions, structured activation labels, token log probabilities, retries, pacing, and resumable per-feature outputs. It preserves the historical top/random split and correlation score, extracts the shared evaluation activations, and, for Fixed ICA, **applies fitting-data orientations before top-example selection**. |
 | `activation_dataset.py` | Modified | Replaces the unavailable hard-coded Pile shard download with a bounded, deterministic Hugging Face dataset stream. Adds explicit dataset-range validation and an optional document limit, and prevents this text-only pipeline from importing torchvision's optional video support. |
 | `autoencoders/ica.py` | Modified | Defers type annotations and makes `torchtyping` a type-checking-only import, avoiding a runtime compatibility dependency. ICA fitting and dictionary calculations are unchanged. |
 | `autoencoders/learned_dict.py` | Modified | Applies the same annotation and type-checking-only compatibility change. Learned-dictionary behavior is unchanged. |

@@ -465,6 +465,7 @@ async def interpret_features_async(
     env_file: Path,
     overwrite: bool,
     orient_signed: bool = False,
+    source_orientations: Sequence[int] | None = None,
 ) -> None:
     from dotenv import load_dotenv
     from openai import AsyncOpenAI
@@ -481,6 +482,15 @@ async def interpret_features_async(
         raise ValueError(f"Expected {FRAGMENT_LEN}-token fragments, got {activations.shape}")
     if n_features > activations.shape[2]:
         raise ValueError(f"Requested {n_features} features but artifact has {activations.shape[2]}")
+    if source_orientations is not None:
+        if not orient_signed:
+            raise ValueError("Explicit source orientations require orient_signed=True")
+        if len(source_orientations) < n_features:
+            raise ValueError(
+                f"Received {len(source_orientations)} orientations for {n_features} features"
+            )
+        if any(int(value) not in (-1, 1) for value in source_orientations[:n_features]):
+            raise ValueError("Source orientations must contain only -1 or 1")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     client = AsyncOpenAI()
@@ -496,9 +506,12 @@ async def interpret_features_async(
             continue
 
         feature_values = np.asarray(activations[:, :, feature], dtype=np.float32)
-        source_orientation = (
-            choose_top_absolute_orientation(feature_values) if orient_signed else 1
-        )
+        if source_orientations is not None:
+            source_orientation = int(source_orientations[feature])
+        elif orient_signed:
+            source_orientation = choose_top_absolute_orientation(feature_values)
+        else:
+            source_orientation = 1
         feature_values = feature_values * source_orientation
         try:
             orientation, train_top, valid_top, valid_random = select_record_indices(
@@ -580,6 +593,9 @@ async def interpret_features_async(
             f"reset_requests={rate_limits.reset_requests})",
             flush=True,
         )
+    await client.close()
+
+
 def interpret_features(**kwargs: Any) -> None:
     asyncio.run(interpret_features_async(**kwargs))
 
@@ -592,14 +608,22 @@ async def _check_model_compatibility(model: str, env_file: Path) -> None:
     load_dotenv(env_file)
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError(f"OPENAI_API_KEY is not set; add it to {env_file}")
-    prediction = await simulate_fragment(
-        AsyncOpenAI(),
-        model,
-        build_simulator_messages("tokens containing the word test", [" test"] * FRAGMENT_LEN, "legacy_nonnegative"),
-        "legacy_nonnegative",
-        retries=0,
-        semaphore=asyncio.Semaphore(1),
-    )
+    client = AsyncOpenAI()
+    try:
+        prediction = await simulate_fragment(
+            client,
+            model,
+            build_simulator_messages(
+                "tokens containing the word test",
+                [" test"] * FRAGMENT_LEN,
+                "legacy_nonnegative",
+            ),
+            "legacy_nonnegative",
+            retries=0,
+            semaphore=asyncio.Semaphore(1),
+        )
+    finally:
+        await client.close()
     if prediction.shape != (FRAGMENT_LEN,) or not np.isfinite(prediction).all():
         raise RuntimeError(f"{model} returned an invalid simulator prediction")
 

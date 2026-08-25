@@ -4,12 +4,12 @@ This project identifies an important issue in the original Figure 2 evaluation: 
 
 Many aspects of the experiment—including evaluating the first 150 features, using an overcomplete SAE with \(R=2\), top-and-random scoring, and reporting confidence intervals across features—are inherited from the original paper. Our concerns are therefore limited to the new sign correction and to unavoidable changes in the reproduction.
 
-Our main concern is that the proposed “Fixed ICA” rule is one reasonable way to make the evaluation less sign-dependent, but it is not yet established as the uniquely correct correction. The rule uses the 20 most extreme token activations from the evaluation corpus to orient each component toward its stronger tail. This makes orientation evaluation-dependent, and a stronger statistical tail need not be the more semantically coherent tail.
+Our main concern was that the initial “Fixed ICA” rule used the 20 most extreme token activations from the evaluation corpus to orient each component toward its stronger tail. This made orientation evaluation-dependent, and a stronger statistical tail need not be the more semantically coherent tail.
 
 We suggest a few focused robustness checks:
 
 1. Choose component signs using only the ICA fitting data, then keep those signs fixed during evaluation.
-> We agree that ICA signs should be chosen using fitting data and then held fixed during evaluation. We reconstructed the exact fitting samples and applied the same stronger-tail orientation rule there. For the full-budget ICA models, fitting-data and evaluation-data orientation agreed for 1,747 of 1,800 components (97.1%), with 96.0%–98.0% agreement at every layer. Thus, the evaluation-dependent choice affects only a small minority of components, although we agree that fitting-data orientation is the cleaner protocol.
+> **Resolved.** Fixed ICA now chooses signs from the exact activations used to fit each ICA model and holds them fixed during evaluation. We reinterpreted all components whose signs changed—82/1,800 reduced-budget and 53/1,800 full-budget components—and verified all 3,600 active results against their fitting-data orientation manifests. The full-budget aggregate mean changed from 0.44491 to 0.44288 (−0.00204), leaving the qualitative conclusions unchanged.
 
 2. Report both tails of each ICA component separately. This would show whether the stronger tail is reliably the more interpretable one and whether both tails sometimes encode distinct concepts.
 > We agree that interpreting both tails might be interesting. However, it is beyond the scope of our present claim. Our objective is not to establish that the stronger tail is uniquely correct or to optimize ICA’s score, but to show that the released one-sided evaluation depends on an arbitrary ICA sign and can therefore substantially understate ICA’s measured interpretability.

@@ -33,6 +33,7 @@ from autoencoders.ica import ICAEncoder
 from autoencoders.sae_ensemble import FunctionalTiedSAE
 from modern_interpret import (
     check_model_compatibility,
+    choose_top_absolute_orientation,
     extract_evaluation_activations,
     interpret_features,
     summarize_modern_results,
@@ -61,6 +62,7 @@ OPENWEBTEXT_TRAINING_START = 100_000
 PYTHIA_LAYERS = tuple(range(6))
 DEFAULT_ICA_SAMPLES = 524_288
 FULL_ICA_MAX_ITER = 200
+ORIENTATION_RULE = "signed mass of 20 largest-absolute fitting activations"
 PLOT_METHODS = ("sae", "ica_full", "fixed_ica_full")
 PLOT_STYLES = {
     "sae": {
@@ -373,6 +375,126 @@ def _fit_ica_full(args: argparse.Namespace, directory: Path, chunks: list[Path])
     return n_presentations
 
 
+def _fitting_orientation_path(directory: Path, source: str) -> Path:
+    return directory / "fitting_orientations" / f"{source}.json"
+
+
+def _load_fitting_orientations(
+    directory: Path, source: str, n_features: int
+) -> list[int]:
+    path = _fitting_orientation_path(directory, source)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing fitting-data ICA orientations: {path}. "
+            "Run `python reproduce_ica_vs_sae.py orient-ica` first."
+        )
+    record = json.loads(path.read_text())
+    orientations = [int(value) for value in record.get("orientations", [])]
+    if len(orientations) < n_features:
+        raise ValueError(f"{path} has {len(orientations)} signs; need {n_features}")
+    if any(value not in (-1, 1) for value in orientations[:n_features]):
+        raise ValueError(f"{path} contains an orientation other than -1 or 1")
+    return orientations[:n_features]
+
+
+def _stream_fitting_orientations(
+    learned_dict: ICAEncoder,
+    activations: torch.Tensor,
+    n_features: int,
+    batch_size: int,
+) -> list[int]:
+    """Encode fitting rows while retaining only each component's 20 extremes."""
+    strongest = np.empty((0, n_features), dtype=np.float64)
+    for start in tqdm(
+        range(0, len(activations), batch_size),
+        desc="ICA orientation",
+        unit="batch",
+    ):
+        encoded = learned_dict.encode(activations[start : start + batch_size])
+        candidates = np.concatenate(
+            (strongest, encoded[:, :n_features].cpu().numpy()), axis=0
+        )
+        if len(candidates) > 20:
+            keep = np.argpartition(np.abs(candidates), -20, axis=0)[-20:]
+            strongest = np.take_along_axis(candidates, keep, axis=0)
+        else:
+            strongest = candidates
+    return [choose_top_absolute_orientation(strongest[:, feature]) for feature in range(n_features)]
+
+
+def orient_ica(args: argparse.Namespace) -> None:
+    """Choose ICA component signs using only the exact ICA fitting activations."""
+    for slug, _ in selected_datasets(args.dataset):
+        for layer in selected_layers(args.layer):
+            directory = run_dir(args, slug, layer)
+            chunks = _activation_chunks(directory)
+            metadata_path = directory / "run_metadata.json"
+            if not metadata_path.exists():
+                raise FileNotFoundError(f"Missing run metadata: {metadata_path}")
+            metadata = json.loads(metadata_path.read_text())
+            chunk = torch.load(chunks[0], map_location="cpu", weights_only=True).to(torch.float32)
+
+            for source, sampled in (("ica", True), ("ica_full", False)):
+                destination = _fitting_orientation_path(directory, source)
+                if destination.exists() and not args.overwrite:
+                    record = json.loads(destination.read_text())
+                    if len(record.get("orientations", [])) < args.n_features:
+                        raise ValueError(
+                            f"{destination} has fewer than {args.n_features} orientations; "
+                            "rerun with --overwrite"
+                        )
+                    log(
+                        "ICA orientation",
+                        f"{slug}/layer{layer}/{source} already exists; skipping",
+                        "32",
+                    )
+                    continue
+
+                artifact = directory / f"{source}.pt"
+                if not artifact.exists():
+                    raise FileNotFoundError(f"Missing fitted ICA artifact: {artifact}")
+                fitting_rows = chunk
+                if sampled:
+                    count = int(metadata["ica_presentations"])
+                    generator = torch.Generator().manual_seed(int(metadata["seed"]))
+                    indices = torch.randperm(len(chunk), generator=generator)[:count]
+                    fitting_rows = chunk[indices]
+                else:
+                    count = int(metadata.get("ica_full_presentations", len(chunk)))
+                    fitting_rows = chunk[:count]
+
+                learned_dict = torch.load(artifact, map_location="cpu", weights_only=False)
+                log(
+                    "ICA orientation",
+                    f"{slug}/layer{layer}/{source} — choosing {args.n_features} signs "
+                    f"from {len(fitting_rows):,} fitting activations",
+                )
+                orientations = _stream_fitting_orientations(
+                    learned_dict,
+                    fitting_rows,
+                    args.n_features,
+                    args.orientation_batch_size,
+                )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    json.dumps(
+                        {
+                            "source": source,
+                            "orientation_source": "ica_fitting_data",
+                            "rule": ORIENTATION_RULE,
+                            "n_fitting_activations": len(fitting_rows),
+                            "n_features": args.n_features,
+                            "seed": int(metadata["seed"]),
+                            "orientations": orientations,
+                        },
+                        indent=2,
+                    )
+                    + "\n"
+                )
+                log("ICA orientation", f"saved {destination}", "32")
+            del chunk
+
+
 def train(args: argparse.Namespace) -> None:
     for slug, dataset_name in selected_datasets(args.dataset):
         for layer in selected_layers(args.layer):
@@ -477,6 +599,11 @@ def interpret(args: argparse.Namespace) -> None:
                 )
                 for method, (source, mode, orient_signed) in methods:
                     feature_count = args.n_features
+                    source_orientations = (
+                        _load_fitting_orientations(directory, source, feature_count)
+                        if orient_signed
+                        else None
+                    )
                     log(
                         "Interpret",
                         f"{slug}/layer{layer} — model={model}, method={method.upper()}, "
@@ -499,6 +626,7 @@ def interpret(args: argparse.Namespace) -> None:
                         env_file=args.env_file,
                         overwrite=args.overwrite,
                         orient_signed=orient_signed,
+                        source_orientations=source_orientations,
                     )
 
 
@@ -895,11 +1023,11 @@ def plot(args: argparse.Namespace) -> None:
         )
     comparison_description = (
         "SAE and ICA use the released training and fitting budgets. Fixed ICA applies "
-        "the sign-orientation correction to the fitted ICA components."
+        "sign orientations chosen only from the ICA fitting activations."
         if args.plot_view == "main"
         else "Full ICA uses 2,098,176 activations and at most 200 iterations; reduced "
         "ICA uses 524,288 activations and 20 iterations. Each Fixed ICA curve applies "
-        "the sign-orientation correction to the corresponding fitted components. "
+        "fitting-data sign orientations to the corresponding components. "
         "Solid lines denote full-budget fits and dashed lines reduced-budget fits."
     )
     caption = (
@@ -920,7 +1048,21 @@ def plot(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("prepare", "train", "train-ica-full", "eval-data", "check-api", "interpret", "summarize", "plot", "all"))
+    parser.add_argument(
+        "stage",
+        choices=(
+            "prepare",
+            "train",
+            "train-ica-full",
+            "orient-ica",
+            "eval-data",
+            "check-api",
+            "interpret",
+            "summarize",
+            "plot",
+            "all",
+        ),
+    )
     parser.add_argument("--dataset", choices=("all", *DATASETS), default="all")
     parser.add_argument("--interpreter-model", choices=("all", *INTERPRETER_MODELS), default="all")
     parser.add_argument("--method", choices=("all", *METHODS), default="all")
@@ -950,6 +1092,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ica-samples", type=int, default=DEFAULT_ICA_SAMPLES)
     parser.add_argument("--ica-max-iter", type=int, default=20)
     parser.add_argument("--ica-tol", type=float, default=1e-4)
+    parser.add_argument("--orientation-batch-size", type=int, default=32_768)
     parser.add_argument("--sae-dict-ratio", type=float, default=2.0)
     parser.add_argument("--sae-l1-alpha", type=float, default=0.0008577)
     parser.add_argument("--sae-learning-rate", type=float, default=1e-3)
@@ -967,15 +1110,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.activation_chunks <= 0 or args.sae_training_chunks <= 0 or args.ica_samples <= 0:
+    if (
+        args.activation_chunks <= 0
+        or args.sae_training_chunks <= 0
+        or args.ica_samples <= 0
+        or args.orientation_batch_size <= 0
+    ):
         raise ValueError("activation, SAE chunk, and ICA sample counts must be positive")
     stages = (
-        (prepare, train, train_ica_full, eval_data, check_api, interpret, summarize, plot)
+        (
+            prepare,
+            train,
+            train_ica_full,
+            orient_ica,
+            eval_data,
+            check_api,
+            interpret,
+            summarize,
+            plot,
+        )
         if args.stage == "all"
         else {
             "prepare": (prepare,),
             "train": (train,),
             "train-ica-full": (train_ica_full,),
+            "orient-ica": (orient_ica,),
             "eval-data": (eval_data,),
             "check-api": (check_api,),
             "interpret": (interpret,),
