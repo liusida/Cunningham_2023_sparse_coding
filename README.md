@@ -12,14 +12,16 @@ the original GPT-3.5/GPT-4 interpreter snapshots are retired. We therefore
 replace those two components while retaining the paper's **OpenWebText**
 evaluation protocol.
 
-| Condition | Train | Eval | Interpreter model |
-| --- | --- | --- | --- |
-| Original | Pile (shard unavailable) | 50,000 fragments from the **OpenWebText** prefix | GPT-3.5/GPT-4 snapshots (retired) |
-| Reproduction 1 | **Pile10k** | 50,000 **valid** fragments from the **OpenWebText** prefix | **GPT4.1-mini** |
-| Reproduction 2 | **OpenWebText** documents 100,000–119,530 | 50,000 **valid** fragments from the **OpenWebText** prefix | **GPT4.1-mini** |
+| Condition | Train | Eval | Interpreter model | Evaluator protocol |
+| --- | --- | --- | --- | --- |
+| Original | Pile (shard unavailable) | 50,000 fragments from the **OpenWebText** prefix | GPT-3.5/GPT-4 snapshots (retired) | Historical few-shot prompts; echoed-`unknown` input log probabilities (legacy API unavailable) |
+| Reproduction 1 | **Pile10k** | 50,000 valid fragments<sup>‡</sup> from the **OpenWebText** prefix | **GPT4.1-mini** | Zero-shot prompts; structured activation labels and output log probabilities |
+| Reproduction 2 | **OpenWebText** documents 100,000–119,530<sup>†</sup> | 50,000 valid fragments<sup>‡</sup> from the **OpenWebText** prefix | **GPT4.1-mini** | Zero-shot prompts; structured activation labels and output log probabilities |
 
-The **OpenWebText** training condition starts at document 100,000 rather than the
+<sup>†</sup> The **OpenWebText** training condition starts at document 100,000 rather than the
 document-0 prefix used for evaluation, preventing train–evaluation overlap.
+
+<sup>‡</sup> A valid fragment contains exactly 64 tokens and no tokenizer replacement character (`�`).
 
 We also restore the missing `bias_decay` buffer in `FunctionalTiedSAE.init`.
 The experiment sets `bias_decay=0.0`, so this fixes the public code's
@@ -81,9 +83,9 @@ substantially under-score ICA; we do not claim that the stronger tail is always
 more interpretable or that this is the uniquely correct orientation rule.
 
 Absolute scores should not be compared directly with the original figure
-because its retired GPT-3.5/GPT-4 interpreters are replaced by
-**GPT4.1-mini**. The comparisons among methods within each panel use the same
-interpreter, examples, prompts, and scoring procedure.
+because the evaluation models and protocol have changed. The comparisons among
+methods within each panel use the same interpreter, examples, prompts, and
+scoring procedure.
 
 ## ICA need not be slow
 
